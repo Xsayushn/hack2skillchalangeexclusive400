@@ -1,0 +1,209 @@
+import React, { useState } from 'react';
+import { LegalDocument, QAResponse } from '../types/legal';
+import { GeminiService } from '../services/geminiService';
+import { Send, Sparkles, Quote, HelpCircle, ArrowRight } from 'lucide-react';
+
+interface DocumentQAViewProps {
+  document: LegalDocument;
+}
+
+interface ChatMessage {
+  id: string;
+  sender: 'user' | 'ai';
+  text: string;
+  qaResponse?: QAResponse;
+  timestamp: string;
+}
+
+export const DocumentQAView: React.FC<DocumentQAViewProps> = ({ document }) => {
+  const [questionInput, setQuestionInput] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [messages, setMessages] = useState<ChatMessage[]>([
+    {
+      id: 'welcome-1',
+      sender: 'ai',
+      text: `Hello! I am your LexiGuard AI legal assistant. I have reviewed "${document.title}". Ask me any question about your obligations, termination rules, landlord visits, deposits, or liability, and I will answer with exact clause quotes.`,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    },
+  ]);
+
+  const handleSend = async (qText?: string) => {
+    const query = qText || questionInput;
+    if (!query.trim() || isLoading) return;
+
+    const userMsg: ChatMessage = {
+      id: `msg-${Date.now()}`,
+      sender: 'user',
+      text: query,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    };
+
+    setMessages(prev => [...prev, userMsg]);
+    setQuestionInput('');
+    setIsLoading(true);
+
+    try {
+      const qaResponse = await GeminiService.askDocumentQuestion(document, query);
+
+      const aiMsg: ChatMessage = {
+        id: `ai-${Date.now()}`,
+        sender: 'ai',
+        text: qaResponse.answer,
+        qaResponse,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      };
+
+      setMessages(prev => [...prev, aiMsg]);
+    } catch (err) {
+      console.error('Q&A error:', err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <section aria-label="Grounded Legal Document Q and A">
+      <div style={{ marginBottom: '1.5rem' }}>
+        <h2 style={{ fontSize: '1.3rem', fontWeight: 700, marginBottom: '0.2rem' }}>
+          Grounded Document Q&A with Verbatim Clause Citations
+        </h2>
+        <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+          Ask any specific question and receive context-grounded answers with direct section quotes to eliminate hallucinations.
+        </p>
+      </div>
+
+      <div className="qa-container">
+        {/* Main Chat Panel */}
+        <div className="glass-panel" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', height: '620px' }}>
+          {/* Messages Thread */}
+          <div className="chat-thread" style={{ flex: 1 }}>
+            {messages.map((msg) => (
+              <div key={msg.id} className={`chat-msg ${msg.sender}`}>
+                <div style={{ fontSize: '0.92rem', lineHeight: 1.6 }}>
+                  {msg.text}
+                </div>
+
+                {/* Cited Verbatim Clauses */}
+                {msg.qaResponse && msg.qaResponse.citedClauses && msg.qaResponse.citedClauses.length > 0 && (
+                  <div style={{ marginTop: '1rem', paddingTop: '0.75rem', borderTop: '1px solid rgba(255,255,255,0.1)' }}>
+                    <div style={{ fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--accent-secondary)', display: 'flex', alignItems: 'center', gap: '0.35rem', marginBottom: '0.4rem' }}>
+                      <Quote size={13} />
+                      Verified Source Clause Citation:
+                    </div>
+
+                    {msg.qaResponse.citedClauses.map((c, i) => (
+                      <div key={i} className="cited-clause-pill">
+                        <strong>{c.clauseNumber}: {c.clauseTitle}</strong>
+                        <div className="quote">
+                          "{c.verbatimQuote}"
+                        </div>
+                        <div style={{ fontSize: '0.8rem', marginTop: '0.4rem', color: 'var(--text-primary)' }}>
+                          <strong>Meaning:</strong> {c.practicalMeaning}
+                        </div>
+                      </div>
+                    ))}
+
+                    {msg.qaResponse.actionableAdvice && (
+                      <div style={{ marginTop: '0.75rem', fontSize: '0.84rem', color: 'var(--text-primary)', background: 'rgba(99,102,241,0.1)', padding: '0.6rem 0.8rem', borderRadius: 'var(--radius-sm)' }}>
+                        <strong>Action Step:</strong> {msg.qaResponse.actionableAdvice}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '0.5rem', textAlign: msg.sender === 'user' ? 'right' : 'left' }}>
+                  {msg.timestamp}
+                </div>
+              </div>
+            ))}
+
+            {isLoading && (
+              <div className="chat-msg ai" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <Sparkles size={16} className="pulse-icon" style={{ color: 'var(--accent-primary)' }} />
+                <span>Consulting document clauses and cross-referencing legal definitions...</span>
+              </div>
+            )}
+          </div>
+
+          {/* Input Box */}
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              handleSend();
+            }}
+            style={{ display: 'flex', gap: '0.5rem', marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid var(--border-subtle)' }}
+          >
+            <input
+              type="text"
+              placeholder={`Ask a question about ${document.title}...`}
+              value={questionInput}
+              onChange={(e) => setQuestionInput(e.target.value)}
+              disabled={isLoading}
+              style={{
+                flex: 1,
+                padding: '0.75rem 1rem',
+                borderRadius: 'var(--radius-md)',
+                background: 'var(--bg-tertiary)',
+                border: '1px solid var(--border-subtle)',
+                color: 'var(--text-primary)',
+                fontFamily: 'inherit',
+                fontSize: '0.9rem',
+              }}
+            />
+            <button
+              type="submit"
+              disabled={isLoading || !questionInput.trim()}
+              className="btn-primary"
+              style={{ padding: '0.75rem 1.25rem' }}
+              aria-label="Send question"
+            >
+              <Send size={16} />
+            </button>
+          </form>
+        </div>
+
+        {/* Sidebar: Suggested Questions for This Contract */}
+        <div className="glass-panel" style={{ padding: '1.25rem', height: '620px', display: 'flex', flexDirection: 'column' }}>
+          <h3 style={{ fontSize: '1rem', fontWeight: 700, marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+            <HelpCircle size={16} style={{ color: 'var(--accent-primary)' }} />
+            Suggested Questions
+          </h3>
+          <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>
+            Click any question to query the document immediately:
+          </p>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', overflowY: 'auto', flex: 1 }}>
+            {document.suggestedQuestions.map((sq, idx) => (
+              <button
+                key={idx}
+                onClick={() => handleSend(sq)}
+                style={{
+                  textAlign: 'left',
+                  background: 'var(--bg-tertiary)',
+                  border: '1px solid var(--border-subtle)',
+                  borderRadius: 'var(--radius-md)',
+                  padding: '0.75rem',
+                  fontSize: '0.84rem',
+                  color: 'var(--text-secondary)',
+                  lineHeight: 1.4,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '0.5rem',
+                }}
+                className="hover-card"
+              >
+                <span>{sq}</span>
+                <ArrowRight size={14} style={{ color: 'var(--accent-primary)', flexShrink: 0 }} />
+              </button>
+            ))}
+          </div>
+
+          <div style={{ marginTop: '1rem', paddingTop: '0.75rem', borderTop: '1px solid var(--border-subtle)', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+            🔒 All queries are processed with strict client-side PII scrubbing enabled.
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+};
