@@ -203,8 +203,8 @@ npm test
 ### Run Locally:
 ```bash
 # 1. Clone the repository
-git clone https://github.com/Xsayushn/lexiguard-ai.git
-cd lexiguard-ai
+git clone https://github.com/Xsayushn/hack2skillchalangeexclusive400.git
+cd hack2skillchalangeexclusive400
 
 # 2. Install dependencies
 npm install
