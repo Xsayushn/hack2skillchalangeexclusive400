@@ -115,7 +115,7 @@ Tenant hereby irrevocably waives any right to a trial by jury in any action or p
           plainEnglish: 'Defines the rental address (450 Maple Ave, Apt 4B) and the initial lease duration of exactly one year.',
           eli5: 'You get to live in the apartment for one year starting February 1st.'
         },
-        category: 'Term',
+        category: 'Termination',
         riskLevel: 'low'
       },
       {

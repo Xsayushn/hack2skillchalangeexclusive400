@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { LegalDocument, ComparisonResult } from '../types/legal';
 import { SAMPLE_DOCUMENTS } from '../data/sampleDocuments';
 import { LegalAnalyzer } from '../services/legalAnalyzer';
@@ -6,16 +6,44 @@ import { ArrowLeftRight, TrendingUp, TrendingDown, AlertTriangle, ShieldCheck } 
 
 interface ComparisonViewProps {
   currentDocument: LegalDocument;
+  allDocuments?: LegalDocument[];
 }
 
-export const ComparisonView: React.FC<ComparisonViewProps> = ({ currentDocument }) => {
-  const [docAId, setDocAId] = useState<string>(SAMPLE_DOCUMENTS[0].id);
-  const [docBId, setDocBId] = useState<string>(SAMPLE_DOCUMENTS[1].id);
+export const ComparisonView: React.FC<ComparisonViewProps> = ({ currentDocument, allDocuments }) => {
+  // Combine user active document with available sample documents
+  const availableDocs = useMemo(() => {
+    const list: LegalDocument[] = [];
+    if (allDocuments && allDocuments.length > 0) {
+      list.push(...allDocuments);
+    } else {
+      list.push(currentDocument);
+      for (const sample of SAMPLE_DOCUMENTS) {
+        if (!list.some(d => d.id === sample.id)) {
+          list.push(sample);
+        }
+      }
+    }
+    return list;
+  }, [currentDocument, allDocuments]);
 
-  const docA = SAMPLE_DOCUMENTS.find(d => d.id === docAId) || currentDocument;
-  const docB = SAMPLE_DOCUMENTS.find(d => d.id === docBId) || SAMPLE_DOCUMENTS[1];
+  const [docAId, setDocAId] = useState<string>(currentDocument.id || availableDocs[0]?.id);
+  const [docBId, setDocBId] = useState<string>(
+    availableDocs.find(d => d.id !== (currentDocument.id || availableDocs[0]?.id))?.id || availableDocs[0]?.id
+  );
 
-  const comparison: ComparisonResult = LegalAnalyzer.compareDocuments(docA, docB);
+  const docA = useMemo(
+    () => availableDocs.find(d => d.id === docAId) || currentDocument,
+    [availableDocs, docAId, currentDocument]
+  );
+  const docB = useMemo(
+    () => availableDocs.find(d => d.id === docBId) || availableDocs[1] || currentDocument,
+    [availableDocs, docBId, currentDocument]
+  );
+
+  const comparison: ComparisonResult = useMemo(
+    () => LegalAnalyzer.compareDocuments(docA, docB),
+    [docA, docB]
+  );
 
   return (
     <section aria-label="Contract Comparison and Diff Matrix">
@@ -24,7 +52,7 @@ export const ComparisonView: React.FC<ComparisonViewProps> = ({ currentDocument 
           Side-by-Side Contract Comparison & Risk Shift Matrix
         </h2>
         <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
-          Compare two versions of an agreement, counter-proposals, or alternative vendor policies to detect shifted liabilities.
+          Compare your uploaded agreement against standard benchmarks or counter-proposals to detect shifted liabilities.
         </p>
       </div>
 
@@ -50,8 +78,10 @@ export const ComparisonView: React.FC<ComparisonViewProps> = ({ currentDocument 
                 fontSize: '0.9rem',
               }}
             >
-              {SAMPLE_DOCUMENTS.map(doc => (
-                <option key={doc.id} value={doc.id}>{doc.title}</option>
+              {availableDocs.map(doc => (
+                <option key={doc.id} value={doc.id}>
+                  {doc.id === currentDocument.id ? `⭐ ${doc.title} (Active)` : doc.title}
+                </option>
               ))}
             </select>
           </div>
@@ -79,8 +109,10 @@ export const ComparisonView: React.FC<ComparisonViewProps> = ({ currentDocument 
                 fontSize: '0.9rem',
               }}
             >
-              {SAMPLE_DOCUMENTS.map(doc => (
-                <option key={doc.id} value={doc.id}>{doc.title}</option>
+              {availableDocs.map(doc => (
+                <option key={doc.id} value={doc.id}>
+                  {doc.id === currentDocument.id ? `⭐ ${doc.title} (Active)` : doc.title}
+                </option>
               ))}
             </select>
           </div>

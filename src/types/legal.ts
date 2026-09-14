@@ -6,6 +6,16 @@ export type DocumentCategory =
   | 'nda' 
   | 'general';
 
+export type RiskCategory = 
+  | 'Termination' 
+  | 'Liability' 
+  | 'Financial' 
+  | 'Intellectual Property' 
+  | 'Restrictive Covenant' 
+  | 'Dispute Resolution' 
+  | 'Privacy'
+  | 'General';
+
 export type RiskSeverity = 'low' | 'medium' | 'high' | 'critical';
 
 export interface Clause {
@@ -19,7 +29,7 @@ export interface Clause {
     plainEnglish: string;
     eli5: string;
   };
-  category: string;
+  category: RiskCategory;
   riskLevel: RiskSeverity;
   riskExplanation?: string;
   counterProposalRecommendation?: string;
@@ -32,7 +42,7 @@ export interface RiskFlag {
   clauseNumber: string;
   title: string;
   severity: RiskSeverity;
-  category: 'Termination' | 'Liability' | 'Financial' | 'Intellectual Property' | 'Restrictive Covenant' | 'Dispute Resolution' | 'Privacy';
+  category: RiskCategory;
   whyItMatters: string;
   recommendation: string;
   suggestedAlternativeText: string;
@@ -82,7 +92,7 @@ export interface LegalDocument {
 
 export interface ClauseComparison {
   id: string;
-  category: string;
+  category: RiskCategory;
   title: string;
   docAText: string;
   docBText: string;
@@ -107,6 +117,7 @@ export interface QAResponse {
   question: string;
   answer: string;
   confidence: number;
+  engineUsed?: 'gemini-live' | 'local-heuristic';
   citedClauses: {
     clauseNumber: string;
     clauseTitle: string;

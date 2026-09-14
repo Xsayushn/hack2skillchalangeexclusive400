@@ -4,6 +4,7 @@ import {
   RiskAssessment,
   RiskFlag,
   RiskSeverity,
+  RiskCategory,
   ComparisonResult,
   ClauseComparison,
   QAResponse,
@@ -124,7 +125,7 @@ export class LegalAnalyzer {
    */
   static evaluateClauseRisk(text: string): {
     severity: RiskSeverity;
-    category: 'Termination' | 'Liability' | 'Financial' | 'Intellectual Property' | 'Restrictive Covenant' | 'Dispute Resolution' | 'Privacy';
+    category: RiskCategory;
     explanation?: string;
     recommendation?: string;
     tags: string[];
@@ -175,8 +176,8 @@ export class LegalAnalyzer {
 
     // 4. Landlord Entry without Notice
     if (
-      (lower.includes('enter the premises') || lower.includes('landlord access')) &&
-      (lower.includes('without prior notice') || lower.includes('at any time'))
+      (lower.includes('enter') || lower.includes('entry') || lower.includes('access')) &&
+      (lower.includes('without prior notice') || lower.includes('without notice') || lower.includes('at any time') || lower.includes('no notice') || lower.includes('unannounced'))
     ) {
       return {
         severity: 'critical',
@@ -256,7 +257,7 @@ export class LegalAnalyzer {
 
     return {
       severity: 'low',
-      category: 'Termination',
+      category: 'General',
       tags: ['Standard Clause'],
     };
   }
@@ -281,7 +282,7 @@ export class LegalAnalyzer {
           clauseNumber: `Clause ${c.number}`,
           title: c.title,
           severity: 'critical',
-          category: c.category as any,
+          category: c.category,
           whyItMatters: c.riskExplanation || 'Contains high-liability or non-standard provisions.',
           recommendation: c.counterProposalRecommendation || 'Demand striking or revising this term.',
           suggestedAlternativeText: `Revision for Clause ${c.number}: Both parties agree to mutual and commercially standard terms.`,
@@ -295,7 +296,7 @@ export class LegalAnalyzer {
           clauseNumber: `Clause ${c.number}`,
           title: c.title,
           severity: 'high',
-          category: c.category as any,
+          category: c.category,
           whyItMatters: c.riskExplanation || 'Shifts excessive obligation onto one party.',
           recommendation: c.counterProposalRecommendation || 'Request softening language.',
           suggestedAlternativeText: `Revision for Clause ${c.number}: Reasonable mutual obligations apply.`,
@@ -343,21 +344,85 @@ export class LegalAnalyzer {
   }
 
   /**
-   * Plain English text generation heuristics
+   * Context-aware Plain English text generation heuristics
    */
   static generatePlainEnglishSummary(text: string): string {
     const clean = text.replace(/\s+/g, ' ').trim();
-    if (clean.length < 50) return clean;
-    return `In plain English: This section sets out rules regarding rights and obligations. Carefully check deadlines, financial liabilities, and notice procedures before agreeing.`;
+    if (clean.length < 30) return clean;
+
+    const lower = clean.toLowerCase();
+
+    // Extract potential deadlines or time limits
+    const timeMatch = clean.match(/\b(?:\d{1,2}\s+(?:hours?|days?|months?|business days?)|twenty-four\s+\(24\)\s+hours|immediately|written notice)\b/i);
+    const timePhrase = timeMatch ? ` Requires action or notice within ${timeMatch[0]}.` : '';
+
+    // Extract potential currency amounts
+    const moneyMatch = clean.match(/\$(?:[0-9]{1,3},)?\d{3}(?:\.\d{2})?|\b(?:\d+\s+months?'?\s+rent)\b/i);
+    const moneyPhrase = moneyMatch ? ` Involves financial terms or liability of ${moneyMatch[0]}.` : '';
+
+    if (lower.includes('enter') || lower.includes('premises') || lower.includes('inspection')) {
+      return `Landlord access rules: Sets conditions under which the landlord or owner may enter your property or unit.${timePhrase} Notice whether entry requires advance scheduling.`;
+    }
+    if (lower.includes('automatically renew') || lower.includes('evergreen') || lower.includes('renewal term')) {
+      return `Automatic renewal trap: Specifies that this contract automatically extends for another full period unless you submit a written cancellation.${timePhrase}`;
+    }
+    if (lower.includes('indemnif') || lower.includes('hold harmless') || lower.includes('consequential damages')) {
+      return `Liability & indemnification: Defines who pays legal expenses, third-party claims, or lost business revenue if a dispute occurs.${moneyPhrase} Check if damages are capped.`;
+    }
+    if (lower.includes('intellectual property') || lower.includes('assigns') || lower.includes('moral rights') || lower.includes('work made for hire')) {
+      return `Intellectual property ownership: Governs who owns code, inventions, and creative materials produced during and potentially outside working hours.`;
+    }
+    if (lower.includes('non-compete') || lower.includes('solicit') || lower.includes('restraint')) {
+      return `Post-contract restrictions: Prohibits working for competing companies or soliciting existing clients after leaving this role.${timePhrase}`;
+    }
+    if (lower.includes('deposit') || lower.includes('forfeited') || lower.includes('cleaning fee')) {
+      return `Security deposit & deduction terms: Outlines what deductions the owner may take and what conditions are required to get your money back.${moneyPhrase}`;
+    }
+    if (lower.includes('arbitration') || lower.includes('class action') || lower.includes('dispute')) {
+      return `Dispute resolution process: Requires disputes to be resolved through private binding arbitration rather than before a public judge or jury.`;
+    }
+    if (lower.includes('terminat') || lower.includes('cancel')) {
+      return `Contract termination rights: Details conditions under which either party can end this agreement before the standard end date.${timePhrase}`;
+    }
+
+    // Dynamic general fallback taking first sentence + actionable guidance
+    const firstSentence = clean.split(/[.!?]\s+/)[0] || clean.slice(0, 120);
+    return `Summary: ${firstSentence}.${timePhrase}${moneyPhrase} Review obligations and notice requirements carefully before agreeing.`;
   }
 
   static generateTLDR(text: string): string {
-    const sentences = text.split(/[.!?]\s+/);
-    return sentences.slice(0, 2).join('. ') + (sentences.length > 2 ? '.' : '');
+    const clean = text.replace(/\s+/g, ' ').trim();
+    const sentences = clean.split(/[.!?]\s+/).filter(s => s.length > 10);
+    if (sentences.length === 0) return clean.slice(0, 150);
+    return sentences.slice(0, 2).join('. ') + '.';
   }
 
-  static generateELI5(_text: string): string {
-    return `Imagine making a deal on the playground: this rule says what happens if someone changes their mind or breaks a promise.`;
+  static generateELI5(text: string): string {
+    const lower = text.toLowerCase();
+
+    if (lower.includes('enter') || lower.includes('premises')) {
+      return `Imagine a landlord having a spare key to your bedroom: this rule says whether they have to knock and ask first, or can just open your door whenever they want.`;
+    }
+    if (lower.includes('automatically renew') || lower.includes('evergreen')) {
+      return `Imagine joining a book club that keeps sending you books and charging your pocket money forever until you mail them a special cancel letter months early.`;
+    }
+    if (lower.includes('indemnif') || lower.includes('liability')) {
+      return `Imagine playing catch: if the other person throws a ball that breaks a neighbor's window, this rule says whether you have to pay for it using your own piggy bank.`;
+    }
+    if (lower.includes('intellectual property') || lower.includes('assigns') || lower.includes('invention')) {
+      return `Imagine you draw a cool superhero at home on Sunday: this rule says whether your school gets to own your drawing just because you go to school there on Monday.`;
+    }
+    if (lower.includes('non-compete') || lower.includes('solicit')) {
+      return `Imagine playing tag: this rule says you aren't allowed to play tag with any other kids on any other playground for two whole years.`;
+    }
+    if (lower.includes('deposit') || lower.includes('fee')) {
+      return `Imagine giving your favorite toy to a friend for safekeeping: this rule says what they can keep if you return it with a tiny scratch.`;
+    }
+    if (lower.includes('arbitration') || lower.includes('court')) {
+      return `Imagine an argument on the playground: instead of asking the teacher or principal, you have to pay a private referee to decide who wins.`;
+    }
+
+    return `Imagine making a promise with a friend on the playground: this rule sets what happens if one person changes their mind or doesn't follow the promise.`;
   }
 
   /**
@@ -450,7 +515,7 @@ export class LegalAnalyzer {
   }
 
   /**
-   * Side-by-side Contract Comparison & Diff Matrix
+   * Side-by-side Contract Comparison & Diff Matrix (O(n) indexed lookup)
    */
   static compareDocuments(docA: LegalDocument, docB: LegalDocument): ComparisonResult {
     const clauseComparisons: ClauseComparison[] = [];
@@ -459,9 +524,23 @@ export class LegalAnalyzer {
 
     const scoreDelta = docB.riskAssessment.overallScore - docA.riskAssessment.overallScore;
 
-    // Map through clauses in B and compare with A
+    // Index Document A clauses for O(1) matching by category and normalized title
+    const docACategoryMap = new Map<RiskCategory, Clause>();
+    const docATitleMap = new Map<string, Clause>();
+
+    for (const a of docA.clauses) {
+      if (!docACategoryMap.has(a.category)) {
+        docACategoryMap.set(a.category, a);
+      }
+      docATitleMap.set(a.title.toLowerCase().trim(), a);
+    }
+
+    // Map through clauses in B and compare with A using O(1) indexed lookup
     docB.clauses.forEach((bClause, i) => {
-      const aClause = docA.clauses[i] || docA.clauses.find(a => a.category === bClause.category);
+      const aClause =
+        docA.clauses[i] ||
+        docATitleMap.get(bClause.title.toLowerCase().trim()) ||
+        docACategoryMap.get(bClause.category);
 
       let verdict: 'A_FAVORABLE' | 'B_FAVORABLE' | 'NEUTRAL' | 'RISK_ESCALATION' = 'NEUTRAL';
       let impact = 'Terms remain substantially equivalent.';

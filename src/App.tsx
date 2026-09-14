@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, Suspense, lazy } from 'react';
 import { LegalDocument } from './types/legal';
 import { SAMPLE_DOCUMENTS } from './data/sampleDocuments';
 import { PiiScrubber } from './services/piiScrubber';
@@ -6,20 +6,23 @@ import { GeminiService } from './services/geminiService';
 import { Navbar } from './components/Navbar';
 import { DisclaimerBanner } from './components/DisclaimerBanner';
 import { DocumentUploader } from './components/DocumentUploader';
-import { SimplifierView } from './components/SimplifierView';
-import { RiskRadarView } from './components/RiskRadarView';
-import { ComparisonView } from './components/ComparisonView';
-import { DocumentQAView } from './components/DocumentQAView';
-import { ActionNavigatorView } from './components/ActionNavigatorView';
-import { AttorneyBriefModal } from './components/AttorneyBriefModal';
-import { ApiKeyModal } from './components/ApiKeyModal';
 import {
   BookOpen,
   ShieldAlert,
   ArrowLeftRight,
   MessageSquare,
   Compass,
+  Sparkles,
 } from 'lucide-react';
+
+// Code-splitting via React.lazy for optimal initial bundle and performance
+const SimplifierView = lazy(() => import('./components/SimplifierView').then(m => ({ default: m.SimplifierView })));
+const RiskRadarView = lazy(() => import('./components/RiskRadarView').then(m => ({ default: m.RiskRadarView })));
+const ComparisonView = lazy(() => import('./components/ComparisonView').then(m => ({ default: m.ComparisonView })));
+const DocumentQAView = lazy(() => import('./components/DocumentQAView').then(m => ({ default: m.DocumentQAView })));
+const ActionNavigatorView = lazy(() => import('./components/ActionNavigatorView').then(m => ({ default: m.ActionNavigatorView })));
+const AttorneyBriefModal = lazy(() => import('./components/AttorneyBriefModal').then(m => ({ default: m.AttorneyBriefModal })));
+const ApiKeyModal = lazy(() => import('./components/ApiKeyModal').then(m => ({ default: m.ApiKeyModal })));
 
 export const App: React.FC = () => {
   // Theme & Accessibility States
@@ -27,7 +30,8 @@ export const App: React.FC = () => {
   const [highContrast, setHighContrast] = useState(false);
   const [dyslexiaFont, setDyslexiaFont] = useState(false);
 
-  // Active Legal Document State
+  // Document Pool: maintains sample contracts + any user-uploaded agreements
+  const [allDocuments, setAllDocuments] = useState<LegalDocument[]>(SAMPLE_DOCUMENTS);
   const [activeDocument, setActiveDocument] = useState<LegalDocument>(SAMPLE_DOCUMENTS[0]);
   const [activeTab, setActiveTab] = useState<'simplifier' | 'risk-radar' | 'comparison' | 'grounded-qa' | 'action-navigator'>('simplifier');
 
@@ -61,17 +65,45 @@ export const App: React.FC = () => {
     }
   }, [activeDocument, piiScrubbingEnabled]);
 
-  const toggleTheme = () => {
+  const toggleTheme = useCallback(() => {
     setTheme(prev => (prev === 'dark' ? 'light' : 'dark'));
-  };
+  }, []);
 
-  const toggleHighContrast = () => {
+  const toggleHighContrast = useCallback(() => {
     setHighContrast(prev => !prev);
-  };
+  }, []);
 
-  const toggleDyslexiaFont = () => {
+  const toggleDyslexiaFont = useCallback(() => {
     setDyslexiaFont(prev => !prev);
-  };
+  }, []);
+
+  // Update active document and add to pool if custom
+  const handleSelectDocument = useCallback((doc: LegalDocument) => {
+    setActiveDocument(doc);
+    setAllDocuments(prev => {
+      if (prev.some(d => d.id === doc.id)) return prev;
+      return [doc, ...prev];
+    });
+  }, []);
+
+  // Keyboard shortcut listener: Escape closes any open modal
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsAttorneyModalOpen(false);
+        setIsApiKeyModalOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  const viewFallback = useMemo(() => (
+    <div style={{ padding: '4rem 2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+      <Sparkles size={28} className="pulse-icon" style={{ color: 'var(--accent-primary)', margin: '0 auto 0.75rem' }} />
+      <p style={{ fontSize: '0.9rem' }}>Loading view intelligence...</p>
+    </div>
+  ), []);
 
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
@@ -95,7 +127,7 @@ export const App: React.FC = () => {
         {/* Document Switcher & PII Scrubber Status Header */}
         <DocumentUploader
           currentDocument={activeDocument}
-          onSelectDocument={setActiveDocument}
+          onSelectDocument={handleSelectDocument}
           piiScrubbingEnabled={piiScrubbingEnabled}
           onTogglePiiScrubbing={() => setPiiScrubbingEnabled(!piiScrubbingEnabled)}
           piiCount={piiCount}
@@ -157,27 +189,29 @@ export const App: React.FC = () => {
           </button>
         </nav>
 
-        {/* Active View Container */}
+        {/* Active View Container with Suspense Code-Splitting */}
         <div style={{ animation: 'fadeIn 0.2s ease-in-out' }}>
-          {activeTab === 'simplifier' && (
-            <SimplifierView document={activeDocument} />
-          )}
+          <Suspense fallback={viewFallback}>
+            {activeTab === 'simplifier' && (
+              <SimplifierView document={activeDocument} />
+            )}
 
-          {activeTab === 'risk-radar' && (
-            <RiskRadarView document={activeDocument} />
-          )}
+            {activeTab === 'risk-radar' && (
+              <RiskRadarView document={activeDocument} />
+            )}
 
-          {activeTab === 'comparison' && (
-            <ComparisonView currentDocument={activeDocument} />
-          )}
+            {activeTab === 'comparison' && (
+              <ComparisonView currentDocument={activeDocument} allDocuments={allDocuments} />
+            )}
 
-          {activeTab === 'grounded-qa' && (
-            <DocumentQAView document={activeDocument} />
-          )}
+            {activeTab === 'grounded-qa' && (
+              <DocumentQAView document={activeDocument} />
+            )}
 
-          {activeTab === 'action-navigator' && (
-            <ActionNavigatorView document={activeDocument} />
-          )}
+            {activeTab === 'action-navigator' && (
+              <ActionNavigatorView document={activeDocument} />
+            )}
+          </Suspense>
         </div>
       </main>
 
@@ -191,20 +225,26 @@ export const App: React.FC = () => {
         </p>
       </footer>
 
-      {/* Attorney Consultation Brief Modal */}
-      <AttorneyBriefModal
-        document={activeDocument}
-        isOpen={isAttorneyModalOpen}
-        onClose={() => setIsAttorneyModalOpen(false)}
-      />
+      {/* Lazy Loaded Modals */}
+      <Suspense fallback={null}>
+        {isAttorneyModalOpen && (
+          <AttorneyBriefModal
+            document={activeDocument}
+            isOpen={isAttorneyModalOpen}
+            onClose={() => setIsAttorneyModalOpen(false)}
+          />
+        )}
 
-      {/* API Key & Engine Config Modal */}
-      <ApiKeyModal
-        isOpen={isApiKeyModalOpen}
-        onClose={() => setIsApiKeyModalOpen(false)}
-        onKeySaved={() => setHasApiKey(GeminiService.hasApiKey())}
-      />
+        {isApiKeyModalOpen && (
+          <ApiKeyModal
+            isOpen={isApiKeyModalOpen}
+            onClose={() => setIsApiKeyModalOpen(false)}
+            onKeySaved={() => setHasApiKey(GeminiService.hasApiKey())}
+          />
+        )}
+      </Suspense>
     </div>
   );
 };
+
 export default App;
