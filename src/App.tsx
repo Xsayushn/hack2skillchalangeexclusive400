@@ -6,6 +6,7 @@ import { GeminiService } from './services/geminiService';
 import { Navbar } from './components/Navbar';
 import { DisclaimerBanner } from './components/DisclaimerBanner';
 import { DocumentUploader } from './components/DocumentUploader';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import {
   BookOpen,
   ShieldAlert,
@@ -189,29 +190,31 @@ export const App: React.FC = () => {
           </button>
         </nav>
 
-        {/* Active View Container with Suspense Code-Splitting */}
+        {/* Active View Container with Suspense Code-Splitting and Robust Error Boundary */}
         <div style={{ animation: 'fadeIn 0.2s ease-in-out' }}>
-          <Suspense fallback={viewFallback}>
-            {activeTab === 'simplifier' && (
-              <SimplifierView document={activeDocument} />
-            )}
+          <ErrorBoundary>
+            <Suspense fallback={viewFallback}>
+              {activeTab === 'simplifier' && (
+                <SimplifierView document={activeDocument} />
+              )}
 
-            {activeTab === 'risk-radar' && (
-              <RiskRadarView document={activeDocument} />
-            )}
+              {activeTab === 'risk-radar' && (
+                <RiskRadarView document={activeDocument} />
+              )}
 
-            {activeTab === 'comparison' && (
-              <ComparisonView currentDocument={activeDocument} allDocuments={allDocuments} />
-            )}
+              {activeTab === 'comparison' && (
+                <ComparisonView currentDocument={activeDocument} allDocuments={allDocuments} />
+              )}
 
-            {activeTab === 'grounded-qa' && (
-              <DocumentQAView document={activeDocument} />
-            )}
+              {activeTab === 'grounded-qa' && (
+                <DocumentQAView document={activeDocument} />
+              )}
 
-            {activeTab === 'action-navigator' && (
-              <ActionNavigatorView document={activeDocument} />
-            )}
-          </Suspense>
+              {activeTab === 'action-navigator' && (
+                <ActionNavigatorView document={activeDocument} />
+              )}
+            </Suspense>
+          </ErrorBoundary>
         </div>
       </main>
 

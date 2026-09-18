@@ -18,6 +18,18 @@ const SSN_TAX_REGEX = /\b\d{3}-\d{2}-\d{4}\b|\b\d{2}-\d{7}\b/g;
 // Credit card and bank account patterns
 const CREDIT_CARD_REGEX = /\b(?:\d{4}[- ]?){3}\d{4}\b/g;
 
+// Bank IBAN (International Bank Account Number)
+const BANK_IBAN_REGEX = /\b[A-Z]{2}\d{2}[A-Z0-9]{11,30}\b/g;
+
+// Government ID / Passport / Driver's License
+const GOVT_ID_REGEX = /\b(?:Passport|Driver'?s?\s*License|DL|Govt\s*ID)(?:\s*(?:No\.?|Number|#))?:\s*([A-Z0-9-]{6,15})\b/gi;
+
+// Date of Birth (DOB)
+const DOB_REGEX = /\b(?:DOB|Date of Birth|Birth Date):\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\b/gi;
+
+// IP Addresses (IPv4 and standard IPv6)
+const IP_ADDRESS_REGEX = /\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b|\b(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\b/g;
+
 // Physical addresses with street indicators and optional city/state/zip
 const ADDRESS_REGEX = /\b\d{1,5}\s+([A-Za-z0-9.\s]{3,35})\s+(?:Street|St|Avenue|Ave|Boulevard|Blvd|Road|Rd|Drive|Dr|Lane|Ln|Court|Ct|Way|Terrace|Way|Suite|Apt|Unit)\b(?:[,\s]+[A-Za-z\s]+(?:,\s*[A-Z]{2}\s*\d{5}(?:-\d{4})?)?)?/gi;
 
@@ -33,9 +45,15 @@ const PROMPT_INJECTION_PATTERNS = [
   /\[\s*\/INST\s*\]/gi,
   /<\|im_start\|>/gi,
   /<\|im_end\|>/gi,
+  /<\|prompter\|>/gi,
+  /<\|assistant\|>/gi,
   /<system>/gi,
   /<\/system>/gi,
-  /(?:ignore\s+previous\s+instructions|system\s*:\s*you\s+are)/gi,
+  /\[\s*RESPONSE\s*\]/gi,
+  /\[\s*\/RESPONSE\s*\]/gi,
+  /SYSTEM\s+OVERRIDE/gi,
+  /DAN\s+Mode/gi,
+  /(?:ignore\s+(?:all\s+)?previous\s+instructions|system\s*:\s*you\s+are|disregard\s+all\s+prior)/gi,
 ];
 
 export class PiiScrubber {
@@ -64,6 +82,10 @@ export class PiiScrubber {
     let phoneCount = 1;
     let addrCount = 1;
     let partyCount = 1;
+    let ibanCount = 1;
+    let idCount = 1;
+    let dobCount = 1;
+    let ipCount = 1;
 
     // 1. Scrub Emails
     sanitized = sanitized.replace(EMAIL_REGEX, (match, offset) => {
@@ -107,7 +129,49 @@ export class PiiScrubber {
       return token;
     });
 
-    // 4. Scrub Phone Numbers
+    // 4. Scrub Bank IBANs
+    sanitized = sanitized.replace(BANK_IBAN_REGEX, (match, offset) => {
+      const token = `[CONFIDENTIAL_IBAN_${ibanCount}]`;
+      entities.push({
+        id: `iban-${ibanCount}`,
+        type: 'FINANCIAL',
+        originalText: match,
+        redactedText: token,
+        index: offset,
+      });
+      ibanCount++;
+      return token;
+    });
+
+    // 5. Scrub Government IDs & Passports (run before phone numbers to prevent digit overlap)
+    sanitized = sanitized.replace(GOVT_ID_REGEX, (match, p1, offset) => {
+      const token = `[CONFIDENTIAL_GOVT_ID_${idCount}]`;
+      entities.push({
+        id: `govtid-${idCount}`,
+        type: 'IDENTIFIER',
+        originalText: p1,
+        redactedText: token,
+        index: offset,
+      });
+      idCount++;
+      return match.replace(p1, token);
+    });
+
+    // 6. Scrub Date of Birth (run before phone numbers to prevent digit overlap)
+    sanitized = sanitized.replace(DOB_REGEX, (match, p1, offset) => {
+      const token = `[CONFIDENTIAL_DOB_${dobCount}]`;
+      entities.push({
+        id: `dob-${dobCount}`,
+        type: 'DATE',
+        originalText: p1,
+        redactedText: token,
+        index: offset,
+      });
+      dobCount++;
+      return match.replace(p1, token);
+    });
+
+    // 7. Scrub Phone Numbers
     sanitized = sanitized.replace(PHONE_REGEX, (match, offset) => {
       // Avoid false positive on simple 4-digit years or clause numbers like 1.2
       const digitsOnly = match.replace(/\D/g, '');
@@ -124,7 +188,7 @@ export class PiiScrubber {
       return token;
     });
 
-    // 5. Scrub Physical Addresses
+    // 8. Scrub Physical Addresses
     sanitized = sanitized.replace(ADDRESS_REGEX, (match, _p1, offset) => {
       const token = `[CONFIDENTIAL_PROPERTY_ADDRESS_${addrCount}]`;
       entities.push({
@@ -138,7 +202,38 @@ export class PiiScrubber {
       return token;
     });
 
-    // 6. Scrub Party Names (Prefix style)
+    // 9. Scrub IP Addresses
+    sanitized = sanitized.replace(IP_ADDRESS_REGEX, (match, offset) => {
+      // Avoid masking small version strings like 1.0.0
+      if (match.startsWith('0.') || match === '127.0.0.1') {
+        const token = `[CONFIDENTIAL_IP_${ipCount}]`;
+        entities.push({
+          id: `ip-${ipCount}`,
+          type: 'IDENTIFIER',
+          originalText: match,
+          redactedText: token,
+          index: offset,
+        });
+        ipCount++;
+        return token;
+      }
+      const parts = match.split('.');
+      if (parts.length === 4 && parts.every(p => !isNaN(Number(p)) && Number(p) <= 255)) {
+        const token = `[CONFIDENTIAL_IP_${ipCount}]`;
+        entities.push({
+          id: `ip-${ipCount}`,
+          type: 'IDENTIFIER',
+          originalText: match,
+          redactedText: token,
+          index: offset,
+        });
+        ipCount++;
+        return token;
+      }
+      return match;
+    });
+
+    // 10. Scrub Party Names (Prefix style)
     sanitized = sanitized.replace(PARTY_NAME_REGEX, (match, p1, offset) => {
       const token = `[CONFIDENTIAL_PARTY_NAME_${partyCount}]`;
       entities.push({
@@ -152,7 +247,7 @@ export class PiiScrubber {
       return match.replace(p1, token);
     });
 
-    // 7. Scrub Explicit Person Names followed by legal role
+    // 11. Scrub Explicit Person Names followed by legal role
     sanitized = sanitized.replace(EXPLICIT_PERSON_REGEX, (_match, p1, offset) => {
       const token = `[CONFIDENTIAL_PARTY_NAME_${partyCount}]`;
       entities.push({

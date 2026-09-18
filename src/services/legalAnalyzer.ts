@@ -11,12 +11,28 @@ import {
   AttorneyBrief,
 } from '../types/legal';
 
+// High-performance memoization cache for parsed documents (avoids redundant regex parsing on re-renders)
+const documentParseCache = new Map<string, LegalDocument>();
+
 export class LegalAnalyzer {
+  static clearParseCache(): void {
+    documentParseCache.clear();
+  }
+
+  static getParseCacheSize(): number {
+    return documentParseCache.size;
+  }
+
   /**
    * Parses arbitrary contract text into structured clauses
    */
   static parseDocument(text: string, title = 'Custom Uploaded Agreement'): LegalDocument {
-    const rawClauses = text.split(/\n(?=(?:\d+\.|\bSection\s+\d+|\bArticle\s+[IVXLCDM]+|\bClause\s+\d+))/i);
+    const cacheKey = `${title}:${text.length}:${text.slice(0, 80)}`;
+    if (documentParseCache.has(cacheKey)) {
+      return documentParseCache.get(cacheKey)!;
+    }
+
+    const rawClauses = text.split(/\n(?=\s*(?:\d+\.|\bSection\s+\d+|\bArticle\s+[IVXLCDM]+|\bClause\s+\d+))/i);
 
     const clauses: Clause[] = [];
     let clauseCounter = 1;
@@ -84,7 +100,7 @@ export class LegalAnalyzer {
 
     const riskAssessment = this.calculateOverallRisk(clauses);
 
-    return {
+    const parsedDoc: LegalDocument = {
       id: `doc-${Date.now()}`,
       title,
       subtitle: 'Parsed and Analyzed by LexiGuard Engine',
@@ -118,6 +134,9 @@ export class LegalAnalyzer {
         'Are there any restrictions on my future work or data privacy?',
       ],
     };
+
+    documentParseCache.set(cacheKey, parsedDoc);
+    return parsedDoc;
   }
 
   /**

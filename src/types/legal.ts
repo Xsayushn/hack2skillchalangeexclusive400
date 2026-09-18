@@ -118,6 +118,7 @@ export interface QAResponse {
   answer: string;
   confidence: number;
   engineUsed?: 'gemini-live' | 'local-heuristic';
+  cached?: boolean;
   citedClauses: {
     clauseNumber: string;
     clauseTitle: string;

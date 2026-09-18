@@ -5,25 +5,79 @@ import { LegalDocument, QAResponse } from '../types/legal';
 const API_STORAGE_KEY = 'lexiguard_gemini_api_key';
 const ACTIVE_MODEL_STORAGE_KEY = 'lexiguard_gemini_model';
 
+// In-Memory Query Response Cache (10-minute TTL) for zero-latency repeats & quota savings
+interface CacheEntry<T> {
+  data: T;
+  timestamp: number;
+}
+const QA_CACHE_TTL_MS = 10 * 60 * 1000;
+const qaCache = new Map<string, CacheEntry<QAResponse>>();
+
 export class GeminiService {
   /**
-   * Retrieves the user's stored Gemini API Key, or falls back to environment variables.
+   * Clears the in-memory response cache (useful for testing and memory cleanup)
+   */
+  static clearCache(): void {
+    qaCache.clear();
+  }
+
+  /**
+   * Returns current count of cached query responses
+   */
+  static getCacheSize(): number {
+    return qaCache.size;
+  }
+
+  /**
+   * Masks sensitive API keys for safe UI display and logging (e.g. AIzaSy...****)
+   */
+  static maskApiKey(key: string): string {
+    if (!key || key.length < 8) return '********';
+    return `${key.slice(0, 6)}...${key.slice(-4)}`;
+  }
+
+  /**
+   * Retrieves stored Gemini API Key, checking sessionStorage first (ephemeral),
+   * then localStorage (persistent), and falling back to Vite env variables.
    */
   static getApiKey(): string {
-    if (typeof window !== 'undefined' && window.localStorage) {
-      const stored = window.localStorage.getItem(API_STORAGE_KEY);
-      if (stored && stored.trim().length > 0) return stored.trim();
+    if (typeof window !== 'undefined') {
+      // 1. Check ephemeral session storage
+      try {
+        const sessionKey = window.sessionStorage?.getItem(API_STORAGE_KEY);
+        if (sessionKey && sessionKey.trim().length > 0) return sessionKey.trim();
+      } catch (_e) {
+        // Ignored if storage restricted
+      }
+
+      // 2. Check local storage
+      try {
+        const stored = window.localStorage?.getItem(API_STORAGE_KEY);
+        if (stored && stored.trim().length > 0) return stored.trim();
+      } catch (_e) {
+        // Ignored
+      }
     }
+
     const envKey = (import.meta as { env?: Record<string, string> }).env?.VITE_GEMINI_API_KEY;
     return (envKey as string) || '';
   }
 
-  static setApiKey(key: string): void {
-    if (typeof window !== 'undefined' && window.localStorage) {
-      if (!key) {
-        window.localStorage.removeItem(API_STORAGE_KEY);
-      } else {
-        window.localStorage.setItem(API_STORAGE_KEY, key.trim());
+  static setApiKey(key: string, persist = true): void {
+    if (typeof window !== 'undefined') {
+      try {
+        if (!key) {
+          window.localStorage?.removeItem(API_STORAGE_KEY);
+          window.sessionStorage?.removeItem(API_STORAGE_KEY);
+        } else if (persist) {
+          window.localStorage?.setItem(API_STORAGE_KEY, key.trim());
+          window.sessionStorage?.removeItem(API_STORAGE_KEY);
+        } else {
+          window.sessionStorage?.setItem(API_STORAGE_KEY, key.trim());
+          window.localStorage?.removeItem(API_STORAGE_KEY);
+        }
+      } catch (_e) {
+        // Storage restricted
       }
     }
   }
@@ -122,22 +176,36 @@ export class GeminiService {
 
   /**
    * Calls Google Gemini REST API or falls back gracefully to Heuristic Engine.
-   * Strictly enforces PII scrubbing and clause-level RAG retrieval.
+   * Strictly enforces PII scrubbing, clause-level RAG retrieval, and LRU response caching.
    */
   static async askDocumentQuestion(
     doc: LegalDocument,
     question: string,
-    enforcePii = true
+    enforcePii = true,
+    signal?: AbortSignal
   ): Promise<QAResponse> {
+    // 0. High-Speed LRU Cache Check (0ms response on repeats / tab switches)
+    const cacheKey = `${doc.id}:${question.trim().toLowerCase()}`;
+    const cachedEntry = qaCache.get(cacheKey);
+    if (cachedEntry && Date.now() - cachedEntry.timestamp < QA_CACHE_TTL_MS) {
+      return {
+        ...cachedEntry.data,
+        cached: true,
+      };
+    }
+
     const apiKey = this.getApiKey();
 
     if (!apiKey) {
       // Offline fallback: Use LegalAnalyzer grounded matching
       const localResult = LegalAnalyzer.answerQuestion(doc, question);
-      return {
+      const result: QAResponse = {
         ...localResult,
         engineUsed: 'local-heuristic',
+        cached: false,
       };
+      qaCache.set(cacheKey, { data: result, timestamp: Date.now() });
+      return result;
     }
 
     try {
@@ -184,6 +252,7 @@ Respond with ONLY the JSON object.`;
       const response = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal,
         body: JSON.stringify({
           contents: [
             {
@@ -201,7 +270,9 @@ Respond with ONLY the JSON object.`;
       if (!response.ok) {
         console.warn('Gemini API call failed, falling back to local heuristic engine', response.statusText);
         const fallback = LegalAnalyzer.answerQuestion(doc, question);
-        return { ...fallback, engineUsed: 'local-heuristic' };
+        const fallbackResult: QAResponse = { ...fallback, engineUsed: 'local-heuristic', cached: false };
+        qaCache.set(cacheKey, { data: fallbackResult, timestamp: Date.now() });
+        return fallbackResult;
       }
 
       const data = await response.json();
@@ -209,15 +280,18 @@ Respond with ONLY the JSON object.`;
 
       if (!rawOutput) {
         const fallback = LegalAnalyzer.answerQuestion(doc, question);
-        return { ...fallback, engineUsed: 'local-heuristic' };
+        const fallbackResult: QAResponse = { ...fallback, engineUsed: 'local-heuristic', cached: false };
+        qaCache.set(cacheKey, { data: fallbackResult, timestamp: Date.now() });
+        return fallbackResult;
       }
 
       const parsed = JSON.parse(rawOutput);
-      return {
+      const liveResult: QAResponse = {
         question,
         answer: parsed.answer || 'Analysis complete.',
         confidence: 0.98,
         engineUsed: 'gemini-live',
+        cached: false,
         citedClauses: parsed.citedClauses || [],
         actionableAdvice: parsed.actionableAdvice || 'Consider consulting a lawyer for formal advice.',
         suggestedNextQuestions: parsed.suggestedNextQuestions || [
@@ -225,10 +299,18 @@ Respond with ONLY the JSON object.`;
           'What happens if either party defaults?',
         ],
       };
+
+      qaCache.set(cacheKey, { data: liveResult, timestamp: Date.now() });
+      return liveResult;
     } catch (err) {
+      if ((err as { name?: string }).name === 'AbortError') {
+        throw err;
+      }
       console.warn('Error during Gemini API call, using offline engine:', err);
       const fallback = LegalAnalyzer.answerQuestion(doc, question);
-      return { ...fallback, engineUsed: 'local-heuristic' };
+      const fallbackResult: QAResponse = { ...fallback, engineUsed: 'local-heuristic', cached: false };
+      qaCache.set(cacheKey, { data: fallbackResult, timestamp: Date.now() });
+      return fallbackResult;
     }
   }
 
