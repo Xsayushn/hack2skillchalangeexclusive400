@@ -5,13 +5,38 @@ import { LegalDocument, QAResponse } from '../types/legal';
 const API_STORAGE_KEY = 'lexiguard_gemini_api_key';
 const ACTIVE_MODEL_STORAGE_KEY = 'lexiguard_gemini_model';
 
-// In-Memory Query Response Cache (10-minute TTL) for zero-latency repeats & quota savings
+// Production-grade LRU Query Response Cache (10-minute TTL, max 50 entries)
 interface CacheEntry<T> {
   data: T;
   timestamp: number;
 }
+const MAX_CACHE_ENTRIES = 50;
 const QA_CACHE_TTL_MS = 10 * 60 * 1000;
 const qaCache = new Map<string, CacheEntry<QAResponse>>();
+
+function getFromLRUCache(key: string): QAResponse | null {
+  const entry = qaCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.timestamp > QA_CACHE_TTL_MS) {
+    qaCache.delete(key);
+    return null;
+  }
+  // LRU Refresh: re-insert so it becomes the most recently used entry
+  qaCache.delete(key);
+  qaCache.set(key, entry);
+  return { ...entry.data, cached: true };
+}
+
+function saveToLRUCache(key: string, data: QAResponse): void {
+  if (qaCache.has(key)) {
+    qaCache.delete(key);
+  } else if (qaCache.size >= MAX_CACHE_ENTRIES) {
+    // Evict least recently used entry (first in Map iteration order)
+    const oldestKey = qaCache.keys().next().value;
+    if (oldestKey) qaCache.delete(oldestKey);
+  }
+  qaCache.set(key, { data, timestamp: Date.now() });
+}
 
 export class GeminiService {
   /**
@@ -100,30 +125,22 @@ export class GeminiService {
   }
 
   /**
-   * Central security gate: guarantees that text is sanitized of PII and injection
-   * attacks before it ever leaves the client.
+   * Mandatory Central Security Gate: Guarantees that ALL text is 100% sanitized
+   * of sensitive PII entities AND adversarial prompt injections before any AI reasoning.
    */
-  static preparePayloadForAI(text: string, piiScrubbing = true): string {
+  static preparePayloadForAI(text: string): string {
     if (!text) return '';
-    if (!piiScrubbing) {
-      return PiiScrubber.sanitizePromptInjection(text);
-    }
     return PiiScrubber.scrub(text).sanitizedText;
   }
 
   /**
    * Clause-level RAG retrieval: extracts only the top 2-4 most relevant clauses
    * for the user's question, reducing token usage and latency by 80-90%.
+   * Returns empty string if no relevant clauses match, enforcing anti-hallucination.
    */
   static retrieveRelevantContext(doc: LegalDocument, question: string, topK = 4): string {
     if (!doc.clauses || doc.clauses.length === 0) {
       return this.preparePayloadForAI(doc.rawText.slice(0, 3000));
-    }
-
-    if (doc.clauses.length <= topK) {
-      return doc.clauses
-        .map(c => `[Clause ${c.number}: ${c.title}]\n${c.originalText}`)
-        .join('\n\n');
     }
 
     const qWords = question
@@ -167,31 +184,38 @@ export class GeminiService {
     scored.sort((a, b) => b.score - a.score);
     const topMatches = scored.slice(0, topK).filter(s => s.score > 0);
 
-    const chosen = topMatches.length > 0 ? topMatches.map(m => m.clause) : doc.clauses.slice(0, topK);
+    // RAG Guardrail: return empty string if no relevant clauses match
+    if (topMatches.length === 0) {
+      return '';
+    }
 
-    return chosen
+    return topMatches
+      .map(m => m.clause)
       .map(c => `[Clause ${c.number}: ${c.title}]\n${c.originalText}`)
       .join('\n\n');
   }
 
   /**
    * Calls Google Gemini REST API or falls back gracefully to Heuristic Engine.
-   * Strictly enforces PII scrubbing, clause-level RAG retrieval, and LRU response caching.
+   * Strictly enforces PII scrubbing, clause-level RAG retrieval, citation verification,
+   * and LRU response caching.
    */
   static async askDocumentQuestion(
     doc: LegalDocument,
     question: string,
-    enforcePii = true,
-    signal?: AbortSignal
+    enforcePiiOrSignal?: boolean | AbortSignal,
+    optionalSignal?: AbortSignal
   ): Promise<QAResponse> {
+    const signal: AbortSignal | undefined =
+      enforcePiiOrSignal instanceof AbortSignal
+        ? enforcePiiOrSignal
+        : optionalSignal;
+
     // 0. High-Speed LRU Cache Check (0ms response on repeats / tab switches)
     const cacheKey = `${doc.id}:${question.trim().toLowerCase()}`;
-    const cachedEntry = qaCache.get(cacheKey);
-    if (cachedEntry && Date.now() - cachedEntry.timestamp < QA_CACHE_TTL_MS) {
-      return {
-        ...cachedEntry.data,
-        cached: true,
-      };
+    const cachedEntry = getFromLRUCache(cacheKey);
+    if (cachedEntry) {
+      return cachedEntry;
     }
 
     const apiKey = this.getApiKey();
@@ -204,20 +228,40 @@ export class GeminiService {
         engineUsed: 'local-heuristic',
         cached: false,
       };
-      qaCache.set(cacheKey, { data: result, timestamp: Date.now() });
+      saveToLRUCache(cacheKey, result);
       return result;
     }
 
     try {
-      const model = this.getModel();
-      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-
       // 1. Clause-level retrieval (RAG)
       const retrievedClauses = this.retrieveRelevantContext(doc, question, 4);
 
+      // RAG Guardrail: If no relevant clauses matched the query, refuse to hallucinate
+      if (!retrievedClauses) {
+        const refusalResult: QAResponse = {
+          question,
+          answer: `No clauses in "${doc.title}" directly address your question. To prevent legal inaccuracy or hallucination, LexiGuard AI only provides answers grounded in explicit contract provisions. Please review the full agreement or consult a licensed attorney.`,
+          confidence: 0.1,
+          engineUsed: 'gemini-live',
+          cached: false,
+          citedClauses: [],
+          actionableAdvice: 'Check if the issue is addressed under a different legal terminology, or request an explicit amendment in writing from the other party.',
+          suggestedNextQuestions: [
+            'What are the general termination terms?',
+            'What are the payment and deposit terms?',
+          ],
+          evidenceStrength: 'LIMITED',
+        };
+        saveToLRUCache(cacheKey, refusalResult);
+        return refusalResult;
+      }
+
       // 2. Central PII and injection sanitization
-      const sanitizedContext = this.preparePayloadForAI(retrievedClauses, enforcePii);
-      const sanitizedQuestion = this.preparePayloadForAI(question, enforcePii);
+      const sanitizedContext = this.preparePayloadForAI(retrievedClauses);
+      const sanitizedQuestion = this.preparePayloadForAI(question);
+
+      const model = this.getModel();
+      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
       const systemPrompt = `You are LexiGuard AI, an expert legal document analyst. 
 You provide clear, accessible legal document explanations to everyday citizens, tenants, and small business owners.
@@ -251,7 +295,10 @@ Respond with ONLY the JSON object.`;
 
       const response = await fetch(endpoint, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': apiKey,
+        },
         signal,
         body: JSON.stringify({
           contents: [
@@ -271,7 +318,7 @@ Respond with ONLY the JSON object.`;
         console.warn('Gemini API call failed, falling back to local heuristic engine', response.statusText);
         const fallback = LegalAnalyzer.answerQuestion(doc, question);
         const fallbackResult: QAResponse = { ...fallback, engineUsed: 'local-heuristic', cached: false };
-        qaCache.set(cacheKey, { data: fallbackResult, timestamp: Date.now() });
+        saveToLRUCache(cacheKey, fallbackResult);
         return fallbackResult;
       }
 
@@ -281,18 +328,36 @@ Respond with ONLY the JSON object.`;
       if (!rawOutput) {
         const fallback = LegalAnalyzer.answerQuestion(doc, question);
         const fallbackResult: QAResponse = { ...fallback, engineUsed: 'local-heuristic', cached: false };
-        qaCache.set(cacheKey, { data: fallbackResult, timestamp: Date.now() });
+        saveToLRUCache(cacheKey, fallbackResult);
         return fallbackResult;
       }
 
       const parsed = JSON.parse(rawOutput);
+
+      // Verify citations deterministically against actual contract clauses
+      const verifiedCitations = (parsed.citedClauses || []).map((citation: { clauseNumber?: string; clauseTitle?: string; verbatimQuote?: string; practicalMeaning?: string }) => {
+        const quote = citation.verbatimQuote || '';
+        const clauseNum = citation.clauseNumber || '';
+        const isVerifiedInSource = LegalAnalyzer.verifyCitation(doc, quote, clauseNum);
+        return {
+          clauseNumber: citation.clauseNumber || 'Cited Clause',
+          clauseTitle: citation.clauseTitle || 'Section Excerpt',
+          verbatimQuote: quote,
+          practicalMeaning: citation.practicalMeaning || '',
+          isVerifiedInSource,
+        };
+      });
+
+      const evidenceStrength = LegalAnalyzer.calculateEvidenceStrength(verifiedCitations);
+
       const liveResult: QAResponse = {
         question,
         answer: parsed.answer || 'Analysis complete.',
-        confidence: 0.98,
+        confidence: evidenceStrength === 'HIGH' ? 0.98 : evidenceStrength === 'MEDIUM' ? 0.75 : 0.4,
         engineUsed: 'gemini-live',
         cached: false,
-        citedClauses: parsed.citedClauses || [],
+        citedClauses: verifiedCitations,
+        evidenceStrength,
         actionableAdvice: parsed.actionableAdvice || 'Consider consulting a lawyer for formal advice.',
         suggestedNextQuestions: parsed.suggestedNextQuestions || [
           'Can this clause be negotiated?',
@@ -300,7 +365,7 @@ Respond with ONLY the JSON object.`;
         ],
       };
 
-      qaCache.set(cacheKey, { data: liveResult, timestamp: Date.now() });
+      saveToLRUCache(cacheKey, liveResult);
       return liveResult;
     } catch (err) {
       if ((err as { name?: string }).name === 'AbortError') {
@@ -309,7 +374,7 @@ Respond with ONLY the JSON object.`;
       console.warn('Error during Gemini API call, using offline engine:', err);
       const fallback = LegalAnalyzer.answerQuestion(doc, question);
       const fallbackResult: QAResponse = { ...fallback, engineUsed: 'local-heuristic', cached: false };
-      qaCache.set(cacheKey, { data: fallbackResult, timestamp: Date.now() });
+      saveToLRUCache(cacheKey, fallbackResult);
       return fallbackResult;
     }
   }
@@ -321,20 +386,19 @@ Respond with ONLY the JSON object.`;
     doc: LegalDocument,
     clauseTitle: string,
     currentText: string,
-    userObjective: string,
-    enforcePii = true
+    userObjective: string
   ): Promise<{ counterClause: string; emailDraft: string; rationale: string }> {
     const apiKey = this.getApiKey();
 
     // Sanitize all inputs before any potential outbound transmission
-    const sanitizedTitle = this.preparePayloadForAI(clauseTitle, enforcePii);
-    const sanitizedText = this.preparePayloadForAI(currentText, enforcePii);
-    const sanitizedGoal = this.preparePayloadForAI(userObjective, enforcePii);
+    const sanitizedTitle = this.preparePayloadForAI(clauseTitle);
+    const sanitizedText = this.preparePayloadForAI(currentText);
+    const sanitizedGoal = this.preparePayloadForAI(userObjective);
 
     if (apiKey) {
       try {
         const model = this.getModel();
-        const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+        const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
         const prompt = `You are an expert contract negotiator assisting a user.
 DOCUMENT: ${doc.title}
@@ -352,7 +416,10 @@ Provide response in JSON:
 
         const response = await fetch(endpoint, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': apiKey,
+          },
           body: JSON.stringify({
             contents: [{ parts: [{ text: prompt }] }],
             generationConfig: {

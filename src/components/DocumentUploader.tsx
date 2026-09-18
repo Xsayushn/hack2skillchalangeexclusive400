@@ -3,21 +3,17 @@ import { LegalDocument } from '../types/legal';
 import { SAMPLE_DOCUMENTS } from '../data/sampleDocuments';
 import { LegalAnalyzer } from '../services/legalAnalyzer';
 import { PiiScrubber } from '../services/piiScrubber';
-import { FileUp, ShieldCheck, ShieldAlert, Sparkles, Building2, Code2, Cloud, Upload } from 'lucide-react';
+import { FileUp, ShieldCheck, Sparkles, Building2, Code2, Cloud, Upload, Lock } from 'lucide-react';
 
 interface DocumentUploaderProps {
   currentDocument: LegalDocument;
   onSelectDocument: (doc: LegalDocument) => void;
-  piiScrubbingEnabled: boolean;
-  onTogglePiiScrubbing: () => void;
   piiCount: number;
 }
 
 export const DocumentUploader: React.FC<DocumentUploaderProps> = ({
   currentDocument,
   onSelectDocument,
-  piiScrubbingEnabled,
-  onTogglePiiScrubbing,
   piiCount,
 }) => {
   const [isCustomOpen, setIsCustomOpen] = useState(false);
@@ -28,11 +24,9 @@ export const DocumentUploader: React.FC<DocumentUploaderProps> = ({
     e.preventDefault();
     if (!customText.trim()) return;
 
-    let textToAnalyze = customText;
-    if (piiScrubbingEnabled) {
-      const scrubbed = PiiScrubber.scrub(customText);
-      textToAnalyze = scrubbed.sanitizedText;
-    }
+    // Mandatory PII Scrubbing: always sanitize user custom text before any analysis
+    const scrubbed = PiiScrubber.scrub(customText);
+    const textToAnalyze = scrubbed.sanitizedText;
 
     const doc = LegalAnalyzer.parseDocument(textToAnalyze, customTitle.trim() || 'Custom Document');
     onSelectDocument(doc);
@@ -49,11 +43,9 @@ export const DocumentUploader: React.FC<DocumentUploaderProps> = ({
     reader.onload = (event) => {
       const content = event.target?.result as string;
       if (content) {
-        let textToAnalyze = content;
-        if (piiScrubbingEnabled) {
-          const scrubbed = PiiScrubber.scrub(content);
-          textToAnalyze = scrubbed.sanitizedText;
-        }
+        // Mandatory PII Scrubbing: always sanitize uploaded files before any analysis
+        const scrubbed = PiiScrubber.scrub(content);
+        const textToAnalyze = scrubbed.sanitizedText;
         const doc = LegalAnalyzer.parseDocument(textToAnalyze, file.name.replace(/\.[^/.]+$/, ''));
         onSelectDocument(doc);
       }
@@ -172,26 +164,35 @@ export const DocumentUploader: React.FC<DocumentUploaderProps> = ({
 
       {/* Security & Client-Side PII Redaction Status Bar */}
       <div className="pii-status-bar">
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          <span className={`pii-badge ${piiScrubbingEnabled ? 'active' : 'inactive'}`}>
-            {piiScrubbingEnabled ? <ShieldCheck size={14} /> : <ShieldAlert size={14} />}
-            {piiScrubbingEnabled ? 'Client-Side PII Scrubber Active' : 'PII Scrubber Disabled'}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+          <span className="pii-badge active">
+            <ShieldCheck size={14} />
+            Client-Side PII Scrubber Active
           </span>
           <span style={{ color: 'var(--text-muted)' }}>
-            {piiScrubbingEnabled 
-              ? `${piiCount} sensitive personal entities (names, emails, phones, addresses) masked`
-              : 'Original text sent unmasked'}
+            {piiCount > 0 
+              ? `${piiCount} sensitive personal entities (names, emails, phones, addresses, IDs) scrubbed & masked`
+              : 'Zero sensitive PII detected in this document'}
           </span>
         </div>
 
-        <button 
-          onClick={onTogglePiiScrubbing}
-          className="icon-btn"
-          style={{ fontSize: '0.78rem', padding: '0.35rem 0.65rem' }}
-          title="Toggle privacy masking before AI analysis"
+        <span 
+          style={{
+            fontSize: '0.78rem',
+            fontWeight: 600,
+            color: 'var(--risk-safe)',
+            background: 'rgba(16, 185, 129, 0.1)',
+            padding: '0.3rem 0.65rem',
+            borderRadius: 'var(--radius-full)',
+            border: '1px solid var(--risk-safe-border)',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '0.35rem'
+          }}
+          title="LexiGuard strictly enforces client-side PII scrubbing on all inputs prior to any AI processing."
         >
-          {piiScrubbingEnabled ? 'Disable PII Redaction' : 'Enable PII Redaction'}
-        </button>
+          <Lock size={12} /> Always Active • Zero Data Leakage
+        </span>
       </div>
     </section>
   );

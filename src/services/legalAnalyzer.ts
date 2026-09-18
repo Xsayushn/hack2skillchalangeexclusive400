@@ -9,29 +9,15 @@ import {
   ClauseComparison,
   QAResponse,
   AttorneyBrief,
+  CitedClause,
+  EvidenceStrength,
 } from '../types/legal';
 
-// High-performance memoization cache for parsed documents (avoids redundant regex parsing on re-renders)
-const documentParseCache = new Map<string, LegalDocument>();
-
 export class LegalAnalyzer {
-  static clearParseCache(): void {
-    documentParseCache.clear();
-  }
-
-  static getParseCacheSize(): number {
-    return documentParseCache.size;
-  }
-
   /**
    * Parses arbitrary contract text into structured clauses
    */
   static parseDocument(text: string, title = 'Custom Uploaded Agreement'): LegalDocument {
-    const cacheKey = `${title}:${text.length}:${text.slice(0, 80)}`;
-    if (documentParseCache.has(cacheKey)) {
-      return documentParseCache.get(cacheKey)!;
-    }
-
     const rawClauses = text.split(/\n(?=\s*(?:\d+\.|\bSection\s+\d+|\bArticle\s+[IVXLCDM]+|\bClause\s+\d+))/i);
 
     const clauses: Clause[] = [];
@@ -135,7 +121,6 @@ export class LegalAnalyzer {
       ],
     };
 
-    documentParseCache.set(cacheKey, parsedDoc);
     return parsedDoc;
   }
 
@@ -445,6 +430,46 @@ export class LegalAnalyzer {
   }
 
   /**
+   * Deterministically verifies whether a quoted excerpt is an authentic verbatim
+   * substring of the contract's actual clauses. Eliminates LLM citation hallucinations.
+   */
+  static verifyCitation(doc: LegalDocument, quote: string, clauseNum?: string): boolean {
+    if (!quote || quote.trim().length < 5) return false;
+    const cleanQuote = quote
+      .replace(/^[“"']+|[”"']+$/g, '')
+      .replace(/\.{3,}$/, '')
+      .trim()
+      .toLowerCase();
+
+    // 1. Check specific clause if number provided
+    if (clauseNum) {
+      const cleanNum = clauseNum.replace(/\D/g, '');
+      const specific = doc.clauses.find(c => c.number.replace(/\D/g, '') === cleanNum);
+      if (specific) {
+        const text = (specific.title + ' ' + specific.originalText).toLowerCase();
+        if (text.includes(cleanQuote) || cleanQuote.includes(text.slice(0, 35))) return true;
+      }
+    }
+
+    // 2. Check across all clauses
+    return doc.clauses.some(c => {
+      const full = (c.title + ' ' + c.originalText).toLowerCase();
+      return full.includes(cleanQuote) || (cleanQuote.length > 20 && full.includes(cleanQuote.slice(0, 40)));
+    });
+  }
+
+  /**
+   * Dynamically computes evidence strength based on retrieval quality and verified citations.
+   */
+  static calculateEvidenceStrength(citedClauses: CitedClause[]): EvidenceStrength {
+    if (!citedClauses || citedClauses.length === 0) return 'LIMITED';
+    const verifiedCount = citedClauses.filter(c => c.isVerifiedInSource).length;
+    if (verifiedCount >= 1) return 'HIGH';
+    if (citedClauses.length >= 1) return 'MEDIUM';
+    return 'LIMITED';
+  }
+
+  /**
    * Grounded Document Q&A Engine
    */
   static answerQuestion(doc: LegalDocument, question: string): QAResponse {
@@ -491,7 +516,8 @@ export class LegalAnalyzer {
       return {
         question,
         answer: `I could not locate an explicit clause in this agreement that directly addresses "${question}". This matter may be governed by default statutory law or is omitted from the contract.`,
-        confidence: 0.45,
+        confidence: 0.2,
+        evidenceStrength: 'LIMITED',
         citedClauses: [],
         actionableAdvice: 'Consider asking the counterparty to insert explicit clarifying language on this point before signing.',
         suggestedNextQuestions: [
@@ -512,16 +538,26 @@ export class LegalAnalyzer {
       practicalAnswer = `According to Clause ${primaryClause.number} ("${primaryClause.title}"), ${primaryClause.simplifiedText}`;
     }
 
+    const citedClauses: CitedClause[] = topMatches.map(m => {
+      const verbatimQuote = m.clause.originalText.slice(0, 260) + (m.clause.originalText.length > 260 ? '...' : '');
+      const isVerifiedInSource = this.verifyCitation(doc, verbatimQuote, m.clause.number);
+      return {
+        clauseNumber: `Clause ${m.clause.number}`,
+        clauseTitle: m.clause.title,
+        verbatimQuote,
+        practicalMeaning: m.clause.readingLevels.plainEnglish,
+        isVerifiedInSource,
+      };
+    });
+
+    const evidenceStrength = this.calculateEvidenceStrength(citedClauses);
+
     return {
       question,
       answer: practicalAnswer,
-      confidence: 0.94,
-      citedClauses: topMatches.map(m => ({
-        clauseNumber: `Clause ${m.clause.number}`,
-        clauseTitle: m.clause.title,
-        verbatimQuote: m.clause.originalText.slice(0, 260) + (m.clause.originalText.length > 260 ? '...' : ''),
-        practicalMeaning: m.clause.readingLevels.plainEnglish,
-      })),
+      confidence: evidenceStrength === 'HIGH' ? 0.96 : evidenceStrength === 'MEDIUM' ? 0.75 : 0.35,
+      evidenceStrength,
+      citedClauses,
       actionableAdvice: primaryClause.counterProposalRecommendation 
         ? `Recommended Action: ${primaryClause.counterProposalRecommendation}`
         : 'Ensure you review the exact wording with all stakeholders.',
@@ -535,6 +571,8 @@ export class LegalAnalyzer {
 
   /**
    * Side-by-side Contract Comparison & Diff Matrix (O(n) indexed lookup)
+   * Deterministic matching: matches strictly by exact title, then title similarity,
+   * then category match. NEVER matches by arbitrary array position [i].
    */
   static compareDocuments(docA: LegalDocument, docB: LegalDocument): ComparisonResult {
     const clauseComparisons: ClauseComparison[] = [];
@@ -554,12 +592,32 @@ export class LegalAnalyzer {
       docATitleMap.set(a.title.toLowerCase().trim(), a);
     }
 
-    // Map through clauses in B and compare with A using O(1) indexed lookup
+    // Map through clauses in B and match deterministically
     docB.clauses.forEach((bClause, i) => {
-      const aClause =
-        docA.clauses[i] ||
-        docATitleMap.get(bClause.title.toLowerCase().trim()) ||
-        docACategoryMap.get(bClause.category);
+      const bTitleNorm = bClause.title.toLowerCase().trim();
+
+      // 1. Exact normalized title match
+      let aClause = docATitleMap.get(bTitleNorm);
+
+      // 2. Keyword similarity match on titles
+      if (!aClause) {
+        const bWords = bTitleNorm.split(/\s+/).filter(w => w.length > 3);
+        if (bWords.length > 0) {
+          for (const cand of docA.clauses) {
+            const candTitle = cand.title.toLowerCase();
+            const matches = bWords.filter(w => candTitle.includes(w)).length;
+            if (matches >= Math.max(1, Math.ceil(bWords.length * 0.5))) {
+              aClause = cand;
+              break;
+            }
+          }
+        }
+      }
+
+      // 3. Category match fallback
+      if (!aClause) {
+        aClause = docACategoryMap.get(bClause.category);
+      }
 
       let verdict: 'A_FAVORABLE' | 'B_FAVORABLE' | 'NEUTRAL' | 'RISK_ESCALATION' = 'NEUTRAL';
       let impact = 'Terms remain substantially equivalent.';

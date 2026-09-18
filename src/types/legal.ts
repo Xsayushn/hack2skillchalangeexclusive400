@@ -113,18 +113,24 @@ export interface ComparisonResult {
   clauseComparisons: ClauseComparison[];
 }
 
+export type EvidenceStrength = 'HIGH' | 'MEDIUM' | 'LIMITED';
+
+export interface CitedClause {
+  clauseNumber: string;
+  clauseTitle: string;
+  verbatimQuote: string;
+  practicalMeaning: string;
+  isVerifiedInSource?: boolean;
+}
+
 export interface QAResponse {
   question: string;
   answer: string;
   confidence: number;
+  evidenceStrength?: EvidenceStrength;
   engineUsed?: 'gemini-live' | 'local-heuristic';
   cached?: boolean;
-  citedClauses: {
-    clauseNumber: string;
-    clauseTitle: string;
-    verbatimQuote: string;
-    practicalMeaning: string;
-  }[];
+  citedClauses: CitedClause[];
   actionableAdvice: string;
   suggestedNextQuestions: string[];
 }

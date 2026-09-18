@@ -36,8 +36,7 @@ export const App: React.FC = () => {
   const [activeDocument, setActiveDocument] = useState<LegalDocument>(SAMPLE_DOCUMENTS[0]);
   const [activeTab, setActiveTab] = useState<'simplifier' | 'risk-radar' | 'comparison' | 'grounded-qa' | 'action-navigator'>('simplifier');
 
-  // Security / PII Scrubbing State
-  const [piiScrubbingEnabled, setPiiScrubbingEnabled] = useState(true);
+  // Security / PII Scrubbing State (Mandatory Client-Side Enforcement)
   const [piiCount, setPiiCount] = useState(4);
 
   // Modals
@@ -60,11 +59,11 @@ export const App: React.FC = () => {
 
   // Recalculate PII counts when document changes
   useEffect(() => {
-    if (activeDocument && piiScrubbingEnabled) {
+    if (activeDocument) {
       const scrubbed = PiiScrubber.scrub(activeDocument.rawText);
       setPiiCount(scrubbed.count);
     }
-  }, [activeDocument, piiScrubbingEnabled]);
+  }, [activeDocument]);
 
   const toggleTheme = useCallback(() => {
     setTheme(prev => (prev === 'dark' ? 'light' : 'dark'));
@@ -129,8 +128,6 @@ export const App: React.FC = () => {
         <DocumentUploader
           currentDocument={activeDocument}
           onSelectDocument={handleSelectDocument}
-          piiScrubbingEnabled={piiScrubbingEnabled}
-          onTogglePiiScrubbing={() => setPiiScrubbingEnabled(!piiScrubbingEnabled)}
           piiCount={piiCount}
         />
 

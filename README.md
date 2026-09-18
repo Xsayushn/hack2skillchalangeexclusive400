@@ -1,7 +1,7 @@
 # ⚖️ LexiGuard AI — Intelligent Legal Document Intelligence & Access Platform
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Tests: 12 Passed](https://img.shields.io/badge/Tests-12%20Passed-emerald.svg)](tests/)
+[![Tests: 48 Passed](https://img.shields.io/badge/Tests-48%20Passed-emerald.svg)](tests/)
 [![Bundle Size](https://img.shields.io/badge/Bundle%20Size-%3C310%20KB-indigo.svg)](dist/)
 [![WCAG AA](https://img.shields.io/badge/Accessibility-WCAG%202.1%20AA-purple.svg)](#accessibility--inclusive-design)
 
@@ -119,21 +119,27 @@ Translates any clause or entire contract into three calibrated reading levels:
 
 ## 🔒 4. Security & Privacy Implementation
 
-1. **Client-Side PII Scrubber**:
-   - Before any text is dispatched to external AI models, LexiGuard scans and redacts personal identifiers:
+1. **Mandatory Client-Side PII Security Gate**:
+   - Before any text is dispatched to external AI models or processed, LexiGuard scans, tokenizes, and redacts personal identifiers with **zero bypass capability**:
      - Emails (`[CONFIDENTIAL_EMAIL_1]`)
      - Phone numbers (`[CONFIDENTIAL_PHONE_1]`)
      - Social Security & Tax IDs (`[CONFIDENTIAL_TAX_ID_1]`)
-     - Street addresses (`[CONFIDENTIAL_PROPERTY_ADDRESS_1]`)
-     - Credit card numbers (`[CONFIDENTIAL_PAYMENT_INFO_1]`)
-     - Party names (`[CONFIDENTIAL_PARTY_NAME_1]`)
-   - Users can toggle PII masking on/off and review the redacted entity count.
+     - Street & Property Addresses (`[CONFIDENTIAL_PROPERTY_ADDRESS_1]`)
+     - Credit Card & Financial Account Info (`[CONFIDENTIAL_PAYMENT_INFO_1]`)
+     - Personal & Counterparty Names (`[CONFIDENTIAL_PARTY_NAME_1]`)
+     - Passports, Driver's Licenses & Dates of Birth (`[CONFIDENTIAL_ID_1]`)
+     - IPv4 and IPv6 Network Addresses (`[CONFIDENTIAL_IP_1]`)
+   - Pre-flight prompt injection neutralizer strips system overrides (`ignore previous instructions`, `[INST]`, `DAN mode`).
 2. **Zero Backend Data Retention**:
-   - 100% client-side architecture. Documents are parsed and stored in volatile browser memory.
-3. **Bring-Your-Own-Key (BYOK) Security**:
-   - API keys are stored solely in `window.localStorage` and used directly in client-to-Google HTTPS requests. No intermediary servers or databases.
-4. **Mandatory Legal Disclaimer Banner**:
-   - Prominently notifies users that the tool provides legal information and educational assistance, not formal licensed attorney representation.
+   - 100% client-side architecture. Documents are parsed and held strictly in volatile browser memory.
+3. **Secure Header-Based API Authentication (No URL Query Key Leakage)**:
+   - Google Gemini API calls transmit keys strictly via HTTP header (`x-goog-api-key`), completely preventing sensitive key exposure in browser history, HTTP referrers, or proxy request URL logs.
+4. **Bring-Your-Own-Key (BYOK) with Ephemeral Session Storage**:
+   - Users can opt to store keys strictly in `sessionStorage` (cleared automatically the moment the browser tab is closed) or persistent `localStorage`.
+5. **Deterministic Verbatim Citation Verification**:
+   - Anti-hallucination verification engine cross-references all quoted text against source clauses and computes an objective Grounding Evidence Strength score (`HIGH`, `MEDIUM`, `LIMITED`).
+6. **Mandatory Legal Disclaimer Banner**:
+   - Prominently notifies users that the tool provides legal educational information, not formal licensed attorney representation.
 
 ---
 
@@ -151,38 +157,69 @@ Translates any clause or entire contract into three calibrated reading levels:
 
 - **Repository Size**: Strictly under **3 MB** (excluding `node_modules` via `.gitignore`), well below the 10 MB competition limit.
 - **Production Bundle**:
-  - `dist/index.html`: 1.22 kB
-  - `dist/assets/index.css`: 13.67 kB (gzip: 3.34 kB)
-  - `dist/assets/index.js`: 292.68 kB (gzip: 88.38 kB)
-  - **Total Production Footprint**: ~307 kB (< 95 kB gzipped).
-- **Compilation Speed**: Full production build in **< 2 seconds**.
-- **Test Duration**: All 12 automated unit tests execute in **< 600ms**.
+  - `dist/index.html`: 2.08 kB
+  - `dist/assets/index.css`: 13.58 kB (gzip: 3.33 kB)
+  - Code-split dynamic chunks for rapid initial load: ~300 kB total (< 95 kB gzipped).
+- **Compilation Speed**: Full production build in **< 2.5 seconds**.
+- **Test Duration**: All 48 automated unit tests execute in **< 850ms**.
+- **Response Caching**: In-memory LRU cache serves repeated questions in **0ms**.
 
 ---
 
 ## 🧪 7. Automated Testing & Validation
 
-The project includes an automated test suite powered by **Vitest**:
+The project includes an automated test suite of **48 tests across 6 suites** powered by **Vitest**:
 
 ```bash
 npm test
 ```
 
 ### Test Coverage Summary:
-- `tests/piiScrubber.test.ts`:
+- `tests/piiScrubber.test.ts` (5 tests):
   - ✓ Email address masking and token generation
   - ✓ Phone number redaction
   - ✓ Social Security and Tax ID redaction
   - ✓ Street address masking
   - ✓ 100% faithful restoration of redacted entities
-- `tests/legalAnalyzer.test.ts`:
-  - ✓ Parsing unstructured contract text into numbered clauses
+- `tests/securityPipeline.test.ts` (11 tests):
+  - ✓ Adversarial prompt injection neutralization
+  - ✓ System override and DAN mode stripping
+  - ✓ Delimiter manipulation defense (`[INST]`, `system:`)
+  - ✓ Combined PII scrubbing + injection sanitization
+  - ✓ Empty string, whitespace-only, and edge-case resilience
+  - ✓ True IPv4 and IPv6 address redaction
+  - ✓ Credit card, passport, and financial data masking
+  - ✓ Redaction audit trail generation
+- `tests/geminiService.test.ts` (7 tests):
+  - ✓ Masked API key generation (`AIzaSy...****`)
+  - ✓ Clause-level RAG context retrieval and token optimization
+  - ✓ Local heuristic offline fallback execution
+  - ✓ Network HTTP error resilience and graceful degradation
+  - ✓ Custom model selection (`gemini-1.5-flash`, `gemini-2.0-flash`)
+  - ✓ Counter-proposal redline and negotiation email generation
+- `tests/cacheAndResilience.test.ts` (8 tests):
+  - ✓ Zero-latency in-memory query response caching (0ms repeated execution)
+  - ✓ Cache clearing and memory management
+  - ✓ LRU cache eviction when capacity exceeds 50 entries
+  - ✓ Fresh, distinct contract parsing without cache collisions
+  - ✓ Deterministic verbatim citation verification and hallucination detection
+  - ✓ Grounding evidence strength calculation (`HIGH` vs `LIMITED`)
+  - ✓ Compare documents deterministic matching without index fallback
+  - ✓ Ephemeral `sessionStorage` vs persistent `localStorage` isolation
+  - ✓ Graceful `AbortSignal` cancellation handling
+- `tests/legalAnalyzer.test.ts` (13 tests):
+  - ✓ Unstructured contract text AST parsing into numbered clauses
   - ✓ Detecting predatory unannounced landlord entry clauses
   - ✓ Detecting overbroad personal project IP seizures
   - ✓ Risk score calculation and letter grade bounds (0–100)
   - ✓ Grounded Q&A matching with verbatim clause citations
   - ✓ Dual document comparative diffing and risk shift delta
   - ✓ Attorney consultation brief generation
+- `tests/componentSmoke.test.ts` (4 tests):
+  - ✓ Main App component rendering with sample document
+  - ✓ Document switching reactivity
+  - ✓ Tab navigation between Simplifier, Risk Radar, and Grounded Q&A
+  - ✓ Modals opening and closing without crash or memory leaks
 
 ---
 

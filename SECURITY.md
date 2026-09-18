@@ -17,11 +17,13 @@
 
 | Threat Vector | Potential Impact | LexiGuard AI Defense | Implementation |
 | :--- | :--- | :--- | :--- |
-| **PII & Confidential Data Leakage** | Exposure of personal names, emails, phones, SSNs, financial accounts to third-party LLMs | Client-Side Pre-Flight PII Scrubber | Mandatory regex-based tokenization replacing sensitive entities with non-identifying tokens (`[CONFIDENTIAL_EMAIL_1]`) before dispatch. |
+| **PII & Confidential Data Leakage** | Exposure of personal names, emails, phones, SSNs, financial accounts to third-party LLMs | Client-Side Pre-Flight PII Scrubber | Mandatory regex-based tokenization replacing sensitive entities with non-identifying tokens (`[CONFIDENTIAL_EMAIL_1]`) before dispatch with zero bypass capability. |
 | **Adversarial Prompt Injection** | Attackers embed directives (`[INST]`, `<system>`) inside contract clauses to hijack AI behavior | Adversarial Input Neutralizer | Strips and neutralizes known delimiter tokens and system overrides (`ignore previous instructions`, `DAN Mode`) prior to LLM reasoning. |
 | **Cross-Site Scripting (XSS)** | Injection of malicious scripts via contract text rendering | Strict Content Security Policy (CSP) & React JSX Escaping | CSP header forbidding unauthorized script sources (`object-src 'none'`, `base-uri 'self'`); React auto-escapes all rendered text strings. |
 | **Cleartext Secret Exposure (CWE-312)** | API keys stored in plain web storage accessible via browser inspection | Key Masking & Dual Storage Strategy | Keys are never logged in cleartext, masked in the UI (`AIzaSy...****`), and support ephemeral `sessionStorage` alongside offline heuristic fallback. |
-| **Denial of Service / Quota Burn** | Repeated expensive API calls on identical questions | In-Memory LRU/TTL Response Caching | Queries and document parsing are memoized with an in-memory cache, responding in 0ms without redundant network egress. |
+| **URL Query Parameter Leakage** | API keys exposed in browser navigation history, proxy server logs, or Referer headers | Secure Header Authentication | Keys transmitted exclusively via `x-goog-api-key` HTTP header rather than URL query parameters (`?key=...`). |
+| **AI Hallucination of Legal Terms** | LLM invents non-existent contract clauses or rights | Grounded RAG & Deterministic Citation Verification | Clause-level RAG filters non-matching queries, and verbatim citations are cross-verified against actual contract text with calculated Evidence Strength (`HIGH`/`MEDIUM`/`LIMITED`). |
+| **Denial of Service / Quota Burn** | Repeated expensive API calls on identical questions | In-Memory LRU/TTL Response Caching | Queries are memoized with an in-memory LRU cache (max 50 entries, 10-min TTL), responding in 0ms without redundant network egress. |
 
 ---
 

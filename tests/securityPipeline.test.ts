@@ -84,12 +84,13 @@ describe('Security Pipeline & PII Enforcement - Guaranteed Confidentiality', () 
   });
 
   it('should redact IP addresses (IPv4 & IPv6) from contract telemetry or SaaS clauses', () => {
-    const text = 'Server logs and analytics will be sent to 192.168.1.100 and 10.0.0.1.';
+    const text = 'Server logs and analytics will be sent to 192.168.1.100 and IPv6 host 2001:0db8:85a3:0000:0000:8a2e:0370:7334.';
     const result = PiiScrubber.scrub(text);
 
     expect(result.sanitizedText).not.toContain('192.168.1.100');
-    expect(result.sanitizedText).not.toContain('10.0.0.1');
-    expect(result.sanitizedText).toContain('[CONFIDENTIAL_IP_');
+    expect(result.sanitizedText).not.toContain('2001:0db8:85a3:0000:0000:8a2e:0370:7334');
+    expect(result.sanitizedText).toContain('[CONFIDENTIAL_IP_1]');
+    expect(result.sanitizedText).toContain('[CONFIDENTIAL_IP_2]');
     expect(result.count).toBe(2);
   });
 
@@ -139,5 +140,14 @@ describe('Security Pipeline & PII Enforcement - Guaranteed Confidentiality', () 
     expect(sanitized).not.toContain('SYSTEM OVERRIDE');
     expect(sanitized).not.toContain('DAN Mode');
     expect(sanitized).not.toContain('[RESPONSE]');
+  });
+
+  it('should handle edge-case empty and whitespace-only strings gracefully', () => {
+    const emptyResult = PiiScrubber.scrub('');
+    expect(emptyResult.count).toBe(0);
+    expect(emptyResult.sanitizedText).toBe('');
+
+    const whitespaceResult = PiiScrubber.scrub('   \n\t  ');
+    expect(whitespaceResult.count).toBe(0);
   });
 });

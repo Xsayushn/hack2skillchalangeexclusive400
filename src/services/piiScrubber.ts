@@ -28,7 +28,7 @@ const GOVT_ID_REGEX = /\b(?:Passport|Driver'?s?\s*License|DL|Govt\s*ID)(?:\s*(?:
 const DOB_REGEX = /\b(?:DOB|Date of Birth|Birth Date):\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\b/gi;
 
 // IP Addresses (IPv4 and standard IPv6)
-const IP_ADDRESS_REGEX = /\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b|\b(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\b/g;
+const IP_ADDRESS_REGEX = /\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b|\b(?:[0-9a-fA-F]{1,4}:){2,7}[0-9a-fA-F]{1,4}\b/g;
 
 // Physical addresses with street indicators and optional city/state/zip
 const ADDRESS_REGEX = /\b\d{1,5}\s+([A-Za-z0-9.\s]{3,35})\s+(?:Street|St|Avenue|Ave|Boulevard|Blvd|Road|Rd|Drive|Dr|Lane|Ln|Court|Ct|Way|Terrace|Way|Suite|Apt|Unit)\b(?:[,\s]+[A-Za-z\s]+(?:,\s*[A-Z]{2}\s*\d{5}(?:-\d{4})?)?)?/gi;
@@ -202,9 +202,23 @@ export class PiiScrubber {
       return token;
     });
 
-    // 9. Scrub IP Addresses
+    // 9. Scrub IP Addresses (IPv4 and IPv6)
     sanitized = sanitized.replace(IP_ADDRESS_REGEX, (match, offset) => {
-      // Avoid masking small version strings like 1.0.0
+      // Check for IPv6 (contains colons and hex digits)
+      if (match.includes(':') && match.split(':').length >= 3) {
+        const token = `[CONFIDENTIAL_IP_${ipCount}]`;
+        entities.push({
+          id: `ip-${ipCount}`,
+          type: 'IDENTIFIER',
+          originalText: match,
+          redactedText: token,
+          index: offset,
+        });
+        ipCount++;
+        return token;
+      }
+
+      // Check for IPv4
       if (match.startsWith('0.') || match === '127.0.0.1') {
         const token = `[CONFIDENTIAL_IP_${ipCount}]`;
         entities.push({
